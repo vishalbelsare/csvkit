@@ -5,25 +5,36 @@ csvpy
 Description
 ===========
 
-Loads a CSV file into a :class:`agate.csv.Reader` object and then drops into a Python shell so the user can inspect the data however they see fit::
+Loads a CSV file into a :class:`agate.csv.Reader` object and then drops into a Python shell so the user can inspect the data however they see fit:
 
-    usage: csvpy [-h] [-d DELIMITER] [-t] [-q QUOTECHAR] [-u {0,1,2,3}] [-b]
-                 [-p ESCAPECHAR] [-z FIELD_SIZE_LIMIT] [-e ENCODING] [-L LOCALE]
-                 [-S] [--blanks] [--date-format DATE_FORMAT]
-                 [--datetime-format DATETIME_FORMAT] [-H] [-K SKIP_LINES] [-v]
-                 [-l] [--zero] [-V] [--dict] [--agate]
-                 [FILE]
+.. code-block:: none
 
-    Load a CSV file into a CSV reader and then drop into a Python shell.
+   usage: csvpy [-h] [-d DELIMITER] [-t] [-q QUOTECHAR] [-u {0,1,2,3}] [-b]
+                [-p ESCAPECHAR] [-z FIELD_SIZE_LIMIT] [-e ENCODING] [-L LOCALE]
+                [-S] [--blanks] [--null-value NULL_VALUES [NULL_VALUES ...]]
+                [--date-format DATE_FORMAT] [--datetime-format DATETIME_FORMAT]
+                [-H] [-K SKIP_LINES] [-v] [-l] [--zero] [-V] [--dict] [--agate]
+                [--no-number-ellipsis] [-y SNIFF_LIMIT] [-I]
+                [FILE]
 
-    positional arguments:
-      FILE                  The CSV file to operate on. If omitted, will accept
-                            input as piped data via STDIN.
+   Load a CSV file into a CSV reader and then drop into a Python shell.
 
-    optional arguments:
-      -h, --help            show this help message and exit
-      --dict                Load the CSV file into a DictReader.
-      --agate               Load the CSV file into an agate table.
+   positional arguments:
+     FILE                  The CSV file to operate on. If omitted, will accept
+                           input as piped data via STDIN.
+
+   optional arguments:
+     -h, --help            show this help message and exit
+     --dict                Load the CSV file into a DictReader.
+     --agate               Load the CSV file into an agate table.
+     --no-number-ellipsis  Disable the ellipsis if the max precision is exceeded.
+     -y SNIFF_LIMIT, --snifflimit SNIFF_LIMIT
+                           Limit CSV dialect sniffing to the specified number of
+                           bytes. Specify "0" to disable sniffing entirely, or
+                           "-1" to sniff the entire file.
+     -I, --no-inference    Disable type inference (and --locale, --date-format,
+                           --datetime-format, --no-leading-zeroes) when parsing
+                           the input.
 
 This tool will automatically use the IPython shell if it is installed, otherwise it will use the running Python shell.
 
@@ -36,26 +47,31 @@ See also: :doc:`../common_arguments`.
 Examples
 ========
 
-Basic use::
+Basic use:
 
-    csvpy examples/dummy.csv
-    Welcome! "examples/dummy.csv" has been loaded in a reader object named "reader".
-    >>> reader.next()
-    [u'a', u'b', u'c']
+.. code-block:: console
 
-As a dictionary::
+$ csvpy examples/dummy.csv
+   Welcome! "examples/dummy.csv" has been loaded in a reader object named "reader".
+   >>> next(reader)
+   ['a', 'b', 'c']
 
-    csvpy --dict examples/dummy.csv
-    Welcome! "examples/dummy.csv" has been loaded in a DictReader object named "reader".
-    >>> reader.next()
-    {u'a': u'1', u'c': u'3', u'b': u'2'}
+As a dictionary:
 
-As an agate table::
+.. code-block:: console
 
-    csvpy --agate examples/dummy.csv
-    Welcome! "examples/dummy.csv" has been loaded in a from_csv object named "reader".
-    >>> reader.print_table()
-    |    a | b | c |
-    | ---- | - | - |
-    | True | 2 | 3 |
+   $ csvpy --dict examples/dummy.csv
+   Welcome! "examples/dummy.csv" has been loaded in a DictReader object named "reader".
+   >>> next(reader)
+   {'a': '1', 'c': '3', 'b': '2'}
 
+As an agate table:
+
+.. code-block:: console
+
+   $ csvpy --agate examples/dummy.csv
+   Welcome! "examples/dummy.csv" has been loaded in a from_csv object named "reader".
+   >>> reader.print_table()
+   |    a | b | c |
+   | ---- | - | - |
+   | True | 2 | 3 |

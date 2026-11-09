@@ -1,17 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
+import io
 import os
 import sys
+import unittest
 from textwrap import dedent
+from unittest.mock import patch
 
-import six
 from sqlalchemy.exc import IntegrityError, OperationalError
-
-try:
-    from mock import patch
-except ImportError:
-    from unittest.mock import patch
 
 from csvkit.utilities.csvsql import CSVSQL, launch_new_instance
 from csvkit.utilities.sql2csv import SQL2CSV
@@ -25,14 +19,67 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
         with patch.object(sys, 'argv', [self.Utility.__name__.lower(), 'examples/dummy.csv']):
             launch_new_instance()
 
+    def test_options(self):
+        for args, message in (
+            (
+                ['--db', 'sqlite:///:memory:', '--dialect', 'sqlite'],
+                'The --dialect option is only valid when neither --db nor --query are specified.',
+            ),
+            (
+                ['--insert'],
+                'The --insert option is only valid when either --db or --query is specified.',
+            ),
+            (
+                ['--db', 'sqlite:///:memory:', '--insert', '--no-create', '--overwrite'],
+                'The --overwrite option is only valid if --no-create is not specified.',
+            ),
+            (
+                ['--db', 'sqlite:///:memory:', '--insert', '--no-create', '--create-if-not-exists'],
+                'The --no-create and --create-if-not-exists options are mutually exclusive.',
+            ),
+        ):
+            with self.subTest(args=args):
+                self.assertError(launch_new_instance, args, message)
+
+    def test_insert_options(self):
+        for args in (
+            ['--no-create'],
+            ['--create-if-not-exists'],
+            ['--overwrite'],
+            ['--before-insert'],
+            ['--after-insert'],
+            ['--chunk-size', '1'],
+        ):
+            with self.subTest(args=args):
+                self.assertError(
+                    launch_new_instance,
+                    args,
+                    f'The {args[0]} option is only valid if --insert is also specified.'
+                )
+
     def setUp(self):
         self.db_file = 'foo.db'
 
     def tearDown(self):
-        try:
+        if os.path.exists(self.db_file):
             os.remove(self.db_file)
-        except OSError:
-            pass
+
+    @unittest.skipIf(os.name != 'nt', 'Windows only')
+    def test_glob(self):
+        sql = self.get_output(['examples/dummy?.csv'])
+
+        self.assertEqual(sql.replace('\t', '  '), dedent('''\
+            CREATE TABLE dummy2 (
+              a BOOLEAN NOT NULL, 
+              b DECIMAL NOT NULL, 
+              c DECIMAL NOT NULL
+            );
+            CREATE TABLE dummy3 (
+              a BOOLEAN NOT NULL, 
+              b DECIMAL NOT NULL, 
+              c DECIMAL NOT NULL
+            );
+        '''))  # noqa: W291
 
     def test_create_table(self):
         sql = self.get_output(['--tables', 'foo', 'examples/testfixed_converted.csv'])
@@ -117,7 +164,7 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
         '''))  # noqa: W291
 
     def test_stdin(self):
-        input_file = six.StringIO('a,b,c\n4,2,3\n')
+        input_file = io.BytesIO(b'a,b,c\n4,2,3\n')
 
         with stdin_as_string(input_file):
             sql = self.get_output(['--tables', 'foo'])
@@ -133,7 +180,7 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
         input_file.close()
 
     def test_stdin_and_filename(self):
-        input_file = six.StringIO("a,b,c\n1,2,3\n")
+        input_file = io.BytesIO(b'a,b,c\n1,2,3\n')
 
         with stdin_as_string(input_file):
             sql = self.get_output(['-', 'examples/dummy.csv'])
@@ -144,7 +191,7 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
         input_file.close()
 
     def test_query(self):
-        input_file = six.StringIO("a,b,c\n1,2,3\n")
+        input_file = io.BytesIO(b'a,b,c\n1,2,3\n')
 
         with stdin_as_string(input_file):
             sql = self.get_output(['--query', 'SELECT m.usda_id, avg(i.sepal_length) AS mean_sepal_length FROM iris '
@@ -159,7 +206,7 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
         input_file.close()
 
     def test_query_empty(self):
-        input_file = six.StringIO()
+        input_file = io.BytesIO()
 
         with stdin_as_string(input_file):
             output = self.get_output(['--query', 'SELECT 1'])
@@ -194,14 +241,14 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
                          'SELECT 1; CREATE TABLE foobar (date DATE)', '--after-insert',
                          'INSERT INTO dummy VALUES (0, 5, 6)'])
 
-        output_file = six.StringIO()
+        output_file = io.StringIO()
         utility = SQL2CSV(['--db', 'sqlite:///' + self.db_file, '--query', 'SELECT * FROM foobar'], output_file)
         utility.run()
         output = output_file.getvalue()
         output_file.close()
         self.assertEqual(output, 'date\n')
 
-        output_file = six.StringIO()
+        output_file = io.StringIO()
         utility = SQL2CSV(['--db', 'sqlite:///' + self.db_file, '--query', 'SELECT * FROM dummy'], output_file)
         utility.run()
         output = output_file.getvalue()

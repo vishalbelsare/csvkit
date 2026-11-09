@@ -1,14 +1,10 @@
 #!/usr/bin/env python
 
-try:
-    import json
-    from collections import OrderedDict
-except ImportError:
-    from ordereddict import OrderedDict
-    import simplejson as json
+import json
+from collections import OrderedDict
+from io import StringIO
 
 import agate
-import six
 
 
 def geojson2csv(f, key=None, **kwargs):
@@ -24,7 +20,7 @@ def geojson2csv(f, key=None, **kwargs):
         raise TypeError('JSON document is not valid GeoJSON: No top-level "type" key.')
 
     if js['type'] != 'FeatureCollection':
-        raise TypeError('Only GeoJSON with root FeatureCollection type is supported. Not %s' % js['type'])
+        raise TypeError(f"Only GeoJSON with root FeatureCollection type is supported. Not {js['type']}")
 
     if 'features' not in js:
         raise TypeError('JSON document is not a valid FeatureCollection: No top-level "features" key.')
@@ -58,7 +54,7 @@ def geojson2csv(f, key=None, **kwargs):
     header.extend(property_fields)
     header.extend(('geojson', 'type', 'longitude', 'latitude'))
 
-    o = six.StringIO()
+    o = StringIO()
     writer = agate.csv.writer(o)
 
     writer.writerow(header)
@@ -68,7 +64,7 @@ def geojson2csv(f, key=None, **kwargs):
 
         for field in property_fields:
             value = properties.get(field)
-            if isinstance(value, OrderedDict):
+            if isinstance(value, (OrderedDict, list)):
                 value = json.dumps(value)
             row.append(value)
 

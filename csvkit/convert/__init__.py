@@ -15,7 +15,9 @@ def guess_format(filename):
 
     if extension in ('csv', 'dbf', 'fixed', 'xls', 'xlsx'):
         return extension
-    elif extension in ['json', 'js']:
+    if extension in ('json', 'js'):
         return 'json'
+    if extension in ('ndjson', 'jsonl', 'jl'):
+        return 'ndjson'
 
     return None

@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
+import sys
+
 import agate
 
-from csvkit.cli import CSVKitUtility, match_column_identifier
+from csvkit.cli import CSVKitUtility, isatty, match_column_identifier
 
 
 class CSVJoin(CSVKitUtility):
@@ -37,16 +39,17 @@ class CSVJoin(CSVKitUtility):
                  'Specify "0" to disable sniffing entirely, or "-1" to sniff the entire file.')
         self.argparser.add_argument(
             '-I', '--no-inference', dest='no_inference', action='store_true',
-            help='Disable type inference when parsing CSV input.')
+            help='Disable type inference (and --locale, --date-format, --datetime-format, --no-leading-zeroes) '
+                 'when parsing the input.')
 
     def main(self):
+        if isatty(sys.stdin) and self.args.input_paths == ['-']:
+            self.argparser.error('You must provide an input file or piped data.')
+
         self.input_files = []
 
         for path in self.args.input_paths:
             self.input_files.append(self._open_input_file(path))
-
-        if len(self.input_files) < 1:
-            self.argparser.error('You must specify at least one file to join.')
 
         if self.args.columns:
             join_column_names = self._parse_join_column_names(self.args.columns)
@@ -74,7 +77,7 @@ class CSVJoin(CSVKitUtility):
                 skip_lines=self.args.skip_lines,
                 sniff_limit=sniff_limit,
                 column_types=column_types,
-                **self.reader_kwargs
+                **self.reader_kwargs,
             ))
             f.close()
 
@@ -98,7 +101,7 @@ class CSVJoin(CSVKitUtility):
             remaining_tables.reverse()
 
             for i, table in enumerate(remaining_tables):
-                jointab = agate.Table.join(jointab, table, join_column_ids[-(i + 2)], join_column_ids[-1])
+                jointab = agate.Table.join(jointab, table, join_column_ids[-1], join_column_ids[-(i + 2)])
         elif self.args.outer_join:
             # Full outer join
             for i, table in enumerate(tables[1:]):

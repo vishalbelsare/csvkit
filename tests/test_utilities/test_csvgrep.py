@@ -1,12 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 import sys
-
-try:
-    from mock import patch
-except ImportError:
-    from unittest.mock import patch
+from unittest.mock import patch
 
 from csvkit.utilities.csvgrep import CSVGrep, launch_new_instance
 from tests.utils import ColumnsTests, CSVKitTestCase, EmptyFileTests, NamesTests
@@ -20,6 +13,14 @@ class TestCSVGrep(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
     def test_launch_new_instance(self):
         with patch.object(sys, 'argv', [self.Utility.__name__.lower()] + self.default_args + ['examples/dummy.csv']):
             launch_new_instance()
+
+    def test_options(self):
+        for args, message in (
+            ([], 'You must specify at least one column to search using the -c option.'),
+            (['-c', '1'], 'One of -r, -m or -f must be specified, unless using the -n option.'),
+        ):
+            with self.subTest(args=args):
+                self.assertError(launch_new_instance, args, message)
 
     def test_skip_lines(self):
         self.assertRows(['--skip-lines', '3', '-c', '1', '-m', '1', 'examples/test_skip_lines.csv'], [
@@ -42,13 +43,13 @@ class TestCSVGrep(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
     def test_match_utf8(self):
         self.assertRows(['-c', '3', '-m', 'ʤ', 'examples/test_utf8.csv'], [
             ['foo', 'bar', 'baz'],
-            ['4', '5', u'ʤ'],
+            ['4', '5', 'ʤ'],
         ])
 
     def test_match_utf8_bom(self):
         self.assertRows(['-c', '3', '-m', 'ʤ', 'examples/test_utf8_bom.csv'], [
             ['foo', 'bar', 'baz'],
-            ['4', '5', u'ʤ'],
+            ['4', '5', 'ʤ'],
         ])
 
     def test_no_match(self):
@@ -71,7 +72,7 @@ class TestCSVGrep(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
     def test_re_match_utf8(self):
         self.assertRows(['-c', '3', '-r', 'ʤ', 'examples/test_utf8.csv'], [
             ['foo', 'bar', 'baz'],
-            ['4', '5', u'ʤ'],
+            ['4', '5', 'ʤ'],
         ])
 
     def test_string_match(self):

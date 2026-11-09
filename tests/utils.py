@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 """
 To test standard input (without piped data), run each of:
 
@@ -19,13 +17,14 @@ And paste:
 
 """
 
+import io
 import sys
 import unittest
 import warnings
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
+from unittest.mock import patch
 
 import agate
-import six
 
 from csvkit.exceptions import ColumnIdentifierError, RequiredHeaderError
 
@@ -41,7 +40,7 @@ def stderr_as_stdout():
 @contextmanager
 def stdin_as_string(content):
     temp = sys.stdin
-    sys.stdin = content
+    sys.stdin = io.TextIOWrapper(io.BufferedReader(content))
     yield
     sys.stdin = temp
 
@@ -50,24 +49,39 @@ class CSVKitTestCase(unittest.TestCase):
     warnings.filterwarnings(action='ignore', module='agate')
 
     def get_output(self, args):
-        output_file = six.StringIO()
+        output_file = io.TextIOWrapper(io.BytesIO(), encoding='utf-8', newline='', write_through=True)
 
         utility = self.Utility(args, output_file)
         utility.run()
 
-        output = output_file.getvalue()
+        output = output_file.buffer.getvalue().decode('utf-8')
         output_file.close()
 
         return output
 
     def get_output_as_io(self, args):
-        return six.StringIO(self.get_output(args))
+        return io.StringIO(self.get_output(args))
 
     def get_output_as_list(self, args):
         return self.get_output(args).split('\n')
 
     def get_output_as_reader(self, args):
         return agate.csv.reader(self.get_output_as_io(args))
+
+    def assertError(self, launch_new_instance, options, message, args=None):
+        command = self.Utility.__name__.lower()
+
+        if args is None:
+            args = ['examples/dummy.csv']
+
+        f = io.StringIO()
+        with redirect_stderr(f):
+            with patch.object(sys, 'argv', [command] + options + args):
+                with self.assertRaises(SystemExit) as e:
+                    launch_new_instance()
+
+        self.assertEqual(e.exception.code, 2)
+        self.assertEqual(f.getvalue().splitlines()[-1], f'{command}: error: {message}')
 
     def assertRows(self, args, rows):
         reader = self.get_output_as_reader(args)
@@ -89,15 +103,14 @@ class CSVKitTestCase(unittest.TestCase):
         self.assertEqual(len(lines), len(rows))
 
 
-class EmptyFileTests(object):
+class EmptyFileTests:
     def test_empty(self):
-        with open('examples/empty.csv') as f:
-            with stdin_as_string(f):
-                utility = self.Utility(getattr(self, 'default_args', []))
-                utility.run()
+        with open('examples/empty.csv', 'rb') as f, stdin_as_string(f):
+            utility = self.Utility(getattr(self, 'default_args', []))
+            utility.run()
 
 
-class NamesTests(object):
+class NamesTests:
     def test_names(self):
         output = self.get_output_as_io(['-n', 'examples/dummy.csv'])
 
@@ -108,7 +121,7 @@ class NamesTests(object):
     def test_invalid_options(self):
         args = ['-n', '--no-header-row', 'examples/dummy.csv']
 
-        output_file = six.StringIO()
+        output_file = io.StringIO()
         utility = self.Utility(args, output_file)
 
         with self.assertRaises(RequiredHeaderError):
@@ -117,11 +130,11 @@ class NamesTests(object):
         output_file.close()
 
 
-class ColumnsTests(object):
+class ColumnsTests:
     def test_invalid_column(self):
         args = getattr(self, 'columns_args', []) + ['-c', '0', 'examples/dummy.csv']
 
-        output_file = six.StringIO()
+        output_file = io.StringIO()
         utility = self.Utility(args, output_file)
 
         with self.assertRaises(ColumnIdentifierError):

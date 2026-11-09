@@ -1,14 +1,8 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
+import io
 import sys
+from unittest.mock import patch
 
-import six
-
-try:
-    from mock import patch
-except ImportError:
-    from unittest.mock import patch
+from agate import config
 
 from csvkit.utilities.csvlook import CSVLook, launch_new_instance
 from tests.utils import CSVKitTestCase, EmptyFileTests, stdin_as_string
@@ -17,31 +11,28 @@ from tests.utils import CSVKitTestCase, EmptyFileTests, stdin_as_string
 class TestCSVLook(CSVKitTestCase, EmptyFileTests):
     Utility = CSVLook
 
+    def tearDown(self):
+        config.set_option('truncation_chars', '…')
+
     def test_launch_new_instance(self):
         with patch.object(sys, 'argv', [self.Utility.__name__.lower(), 'examples/dummy.csv']):
             launch_new_instance()
 
     def test_runs(self):
-        if six.PY2:
-            self.get_output(['examples/test_utf8.csv'])
-        else:
-            self.assertLines(['examples/test_utf8.csv'], [
-                '| foo | bar | baz |',
-                '| --- | --- | --- |',
-                '|   1 |   2 | 3   |',
-                '|   4 |   5 | ʤ   |',
-            ])
+        self.assertLines(['examples/test_utf8.csv'], [
+            '| foo | bar | baz |',
+            '| --- | --- | --- |',
+            '|   1 |   2 | 3   |',
+            '|   4 |   5 | ʤ   |',
+        ])
 
     def test_encoding(self):
-        if six.PY2:
-            self.get_output(['-e', 'latin1', 'examples/test_latin1.csv'])
-        else:
-            self.assertLines(['-e', 'latin1', 'examples/test_latin1.csv'], [
-                '| a | b | c |',
-                '| - | - | - |',
-                '| 1 | 2 | 3 |',
-                '| 4 | 5 | © |',
-            ])
+        self.assertLines(['-e', 'latin1', 'examples/test_latin1.csv'], [
+            '| a | b | c |',
+            '| - | - | - |',
+            '| 1 | 2 | 3 |',
+            '| 4 | 5 | © |',
+        ])
 
     def test_simple(self):
         self.assertLines(['examples/dummy3.csv'], [
@@ -78,7 +69,7 @@ class TestCSVLook(CSVKitTestCase, EmptyFileTests):
             '| foo | bar | baz |',
             '| --- | --- | --- |',
             '|   1 |   2 | 3   |',
-            u'|   4 |   5 | ʤ   |',
+            '|   4 |   5 | ʤ   |',
         ])
 
     def test_unicode_bom(self):
@@ -86,7 +77,7 @@ class TestCSVLook(CSVKitTestCase, EmptyFileTests):
             '| foo | bar | baz |',
             '| --- | --- | --- |',
             '|   1 |   2 | 3   |',
-            u'|   4 |   5 | ʤ   |',
+            '|   4 |   5 | ʤ   |',
         ])
 
     def test_linenumbers(self):
@@ -123,7 +114,6 @@ class TestCSVLook(CSVKitTestCase, EmptyFileTests):
         self.assertLines(['--max-rows', '0', 'examples/dummy.csv'], [
             '| a | b | c |',
             '| - | - | - |',
-            '| ... | ... | ... |',
         ])
 
     def test_max_columns(self):
@@ -140,8 +130,29 @@ class TestCSVLook(CSVKitTestCase, EmptyFileTests):
             '| Tr... | 2 | 3 |',
         ])
 
+    def test_max_precision(self):
+        self.assertLines(['--max-precision', '0', 'examples/test_precision.csv'], [
+            '|  a |',
+            '| -- |',
+            '| 1… |',
+        ])
+
+    def test_no_number_ellipsis(self):
+        self.assertLines(['--no-number-ellipsis', 'examples/test_precision.csv'], [
+            '|     a |',
+            '| ----- |',
+            '| 1.235 |',
+        ])
+
+    def test_max_precision_no_number_ellipsis(self):
+        self.assertLines(['--max-precision', '0', '--no-number-ellipsis', 'examples/test_precision.csv'], [
+            '| a |',
+            '| - |',
+            '| 1 |',
+        ])
+
     def test_stdin(self):
-        input_file = six.StringIO('a,b,c\n1,2,3\n4,5,6\n')
+        input_file = io.BytesIO(b'a,b,c\n1,2,3\n4,5,6\n')
 
         with stdin_as_string(input_file):
             self.assertLines([], [

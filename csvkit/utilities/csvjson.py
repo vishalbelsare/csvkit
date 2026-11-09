@@ -1,21 +1,12 @@
 #!/usr/bin/env python
 
-import codecs
-import datetime
-import decimal
+import json
 import sys
-
-try:
-    import json
-    from collections import OrderedDict
-except ImportError:
-    from ordereddict import OrderedDict
-    import simplejson as json
+from collections import OrderedDict
 
 import agate
-import six
 
-from csvkit.cli import CSVKitUtility, match_column_identifier
+from csvkit.cli import CSVKitUtility, default_str_decimal, match_column_identifier
 
 
 class CSVJSON(CSVKitUtility):
@@ -60,29 +51,31 @@ class CSVJSON(CSVKitUtility):
                  'Specify "0" to disable sniffing entirely, or "-1" to sniff the entire file.')
         self.argparser.add_argument(
             '-I', '--no-inference', dest='no_inference', action='store_true',
-            help='Disable type inference (and --locale, --date-format, --datetime-format) when parsing CSV input.')
-
-    def __init__(self, args=None, output_file=None):
-        super(CSVJSON, self).__init__(args, output_file)
-
-        self.validate_args()
-
-        self.json_kwargs = {
-            'ensure_ascii': False,
-            'indent': self.args.indent,
-        }
-
-        # We need to do this stream dance here, because we aren't writing through agate.
-        if six.PY2:
-            self.stream = codecs.getwriter('utf-8')(self.output_file)
-            self.json_kwargs['encoding'] = 'utf-8'
-        else:
-            self.stream = self.output_file
+            help='Disable type inference (and --locale, --date-format, --datetime-format, --no-leading-zeroes) '
+                 'when parsing the input.')
 
     def main(self):
         """
         Convert CSV to JSON.
         """
+        if self.args.lat and not self.args.lon:
+            self.argparser.error('--lon is required whenever --lat is specified.')
+        if self.args.lon and not self.args.lat:
+            self.argparser.error('--lat is required whenever --lon is specified.')
+
+        if self.args.crs and not self.args.lat:
+            self.argparser.error('--crs is only allowed when --lat and --lon are also specified.')
+        if self.args.type and not self.args.lat:
+            self.argparser.error('--type is only allowed when --lat and --lon are also specified.')
+        if self.args.geometry and not self.args.lat:
+            self.argparser.error('--geometry is only allowed when --lat and --lon are also specified.')
+
+        if self.args.key and self.args.streamOutput and not (self.args.lat and self.args.lon):
+            self.argparser.error('--key is only allowed with --stream when --lat and --lon are also specified.')
+
+        self.json_kwargs = {
+            'indent': self.args.indent,
+        }
 
         if self.can_stream():
             if self.additional_input_expected():
@@ -103,16 +96,9 @@ class CSVJSON(CSVKitUtility):
                 self.output_json()
 
     def dump_json(self, data, newline=False):
-        def default(obj):
-            if isinstance(obj, (datetime.date, datetime.datetime)):
-                return obj.isoformat()
-            elif isinstance(obj, decimal.Decimal):
-                return str(obj)
-            raise TypeError('%s is not JSON serializable' % repr(obj))
-
-        json.dump(data, self.stream, default=default, **self.json_kwargs)
+        json.dump(data, self.output_file, default=default_str_decimal, ensure_ascii=False, **self.json_kwargs)
         if newline:
-            self.stream.write("\n")
+            self.output_file.write("\n")
 
     def can_stream(self):
         return (
@@ -125,22 +111,6 @@ class CSVJSON(CSVKitUtility):
     def is_geo(self):
         return self.args.lat and self.args.lon
 
-    def validate_args(self):
-        if self.args.lat and not self.args.lon:
-            self.argparser.error('--lon is required whenever --lat is specified.')
-        if self.args.lon and not self.args.lat:
-            self.argparser.error('--lat is required whenever --lon is specified.')
-
-        if self.args.crs and not self.args.lat:
-            self.argparser.error('--crs is only allowed when --lat and --lon are also specified.')
-        if self.args.type and not self.args.lat:
-            self.argparser.error('--type is only allowed when --lat and --lon are also specified.')
-        if self.args.geometry and not self.args.lat:
-            self.argparser.error('--geometry is only allowed when --lat and --lon are also specified.')
-
-        if self.args.key and self.args.streamOutput and not (self.args.lat and self.args.lon):
-            self.argparser.error('--key is only allowed with --stream when --lat and --lon are also specified.')
-
     def read_csv_to_table(self):
         sniff_limit = self.args.sniff_limit if self.args.sniff_limit != -1 else None
         return agate.Table.from_csv(
@@ -148,7 +118,7 @@ class CSVJSON(CSVKitUtility):
             skip_lines=self.args.skip_lines,
             sniff_limit=sniff_limit,
             column_types=self.get_column_types(),
-            **self.reader_kwargs
+            **self.reader_kwargs,
         )
 
     def output_json(self):
@@ -254,7 +224,7 @@ class CSVJSON(CSVKitUtility):
                 # Prevent "type" or geo fields from being added to properties.
                 if c is None or i in (self.type_column, self.lat_column, self.lon_column, self.geometry_column):
                     continue
-                elif i == self.id_column:
+                if i == self.id_column:
                     feature['id'] = c
                 elif c:
                     feature['properties'][self.column_names[i]] = c

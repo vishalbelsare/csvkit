@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import re
 import unittest
 
@@ -12,17 +10,17 @@ class TestGrep(unittest.TestCase):
     def setUp(self):
         self.tab1 = [
             ['id', 'name', 'i_work_here'],
-            [u'1', u'Chicago Reader', u'first'],
-            [u'2', u'Chicago Sun-Times', u'only'],
-            [u'3', u'Chicago Tribune', u'only'],
-            [u'1', u'Chicago Reader', u'second']]
+            ['1', 'Chicago Reader', 'first'],
+            ['2', 'Chicago Sun-Times', 'only'],
+            ['3', 'Chicago Tribune', 'only'],
+            ['1', 'Chicago Reader', 'second']]
 
         self.tab2 = [
             ['id', 'age', 'i_work_here'],
-            [u'1', u'first', u'0'],
-            [u'4', u'only', u'0'],
-            [u'1', u'second', u'0'],
-            [u'2', u'only', u'0', u'0']]  # Note extra value in this column
+            ['1', 'first', '0'],
+            ['4', 'only', '0'],
+            ['1', 'second', '0'],
+            ['2', 'only', '0', '0']]  # Note extra value in this column
 
     def test_pattern(self):
         fcr = FilteringCSVReader(iter(self.tab1), patterns=['1'])
@@ -133,7 +131,7 @@ class TestGrep(unittest.TestCase):
     def test_multiline(self):
         table = [
             ['a', 'b'],
-            ['1', 'foo\nbar']
+            ['1', 'foo\nbar'],
         ]
         fcr = FilteringCSVReader(iter(table), patterns={'b': re.compile('bar')})
         self.assertEqual(table[0], next(fcr))

@@ -18,7 +18,7 @@ from csvkit.cli import CSVKitUtility
 
 class CSVCut(CSVKitUtility):
     description = 'Filter and truncate CSV files. Like the Unix "cut" command, but for tabular data.'
-    override_flags = ['L', 'blanks', 'date-format', 'datetime-format']
+    override_flags = ['L', 'I']
 
     def add_arguments(self):
         self.argparser.add_argument(
@@ -35,6 +35,10 @@ class CSVCut(CSVKitUtility):
         self.argparser.add_argument(
             '-x', '--delete-empty-rows', dest='delete_empty', action='store_true',
             help='After cutting, delete rows which are completely empty.')
+        self.argparser.add_argument(
+            '--ignore-unknown-columns', dest='ignore_unknown_columns', action='store_true',
+            help='Ignore identifiers in --columns (-c) that do not match a column in the input, '
+                 'instead of erroring.')
 
     def main(self):
         if self.args.names_only:

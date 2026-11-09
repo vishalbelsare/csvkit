@@ -1,21 +1,35 @@
 #!/usr/bin/env python
-
 import argparse
+import ast
 import bz2
-import codecs
+import csv
+import datetime
+import decimal
 import gzip
 import itertools
+import lzma
+import os
+import re
 import sys
 import warnings
+from codecs import BOM_UTF8
+from glob import glob
 from os.path import splitext
 
 import agate
-import six
+from agate.data_types.base import DEFAULT_NULL_VALUES
 
 from csvkit.exceptions import ColumnIdentifierError, RequiredHeaderError
 
+try:
+    import zstandard
+except ImportError:
+    zstandard = None
 
-class LazyFile(six.Iterator):
+QUOTING_CHOICES = sorted(getattr(csv, name) for name in dir(csv) if name.startswith('QUOTE_'))
+
+
+class LazyFile:
     """
     A proxy for a File object that delays opening it until
     a read method is called.
@@ -33,10 +47,7 @@ class LazyFile(six.Iterator):
         self._lazy_kwargs = kwargs
 
     def __getattr__(self, name):
-        if not self._is_lazy_opened:
-            self.f = self.init(*self._lazy_args, **self._lazy_kwargs)
-            self._is_lazy_opened = True
-
+        self._open()
         return getattr(self.f, name)
 
     def __iter__(self):
@@ -49,30 +60,44 @@ class LazyFile(six.Iterator):
             self._is_lazy_opened = False
 
     def __next__(self):
+        self._open()
+        return next(self.f).replace('\0', '')
+
+    def _open(self):
         if not self._is_lazy_opened:
             self.f = self.init(*self._lazy_args, **self._lazy_kwargs)
             self._is_lazy_opened = True
 
-        return next(self.f)
 
-
-class CSVKitUtility(object):
+class CSVKitUtility:
     description = ''
     epilog = ''
     override_flags = ''
 
-    def __init__(self, args=None, output_file=None):
+    def __init__(self, args=None, output_file=None, error_file=None):
         """
         Perform argument processing and other setup for a CSVKitUtility.
         """
+        if args is None:
+            args = sys.argv[1:]
+        if os.name == 'nt':
+            args = _expand_args(args)
+
         self._init_common_parser()
         self.add_arguments()
         self.args = self.argparser.parse_args(args)
+
         # Output file is only set during testing.
         if output_file is None:
             self.output_file = sys.stdout
         else:
             self.output_file = output_file
+
+        # Error file is only set during testing.
+        if error_file is None:
+            self.error_file = sys.stderr
+        else:
+            self.error_file = error_file
 
         self.reader_kwargs = self._extract_csv_reader_kwargs()
         self.writer_kwargs = self._extract_csv_writer_kwargs()
@@ -86,7 +111,7 @@ class CSVKitUtility(object):
         # Without this fix you will see at the end:
         #  [Errno 32] Broken pipe
         # With this fix, there should be no error
-        # For details on Python and SIGPIPE, see http://bugs.python.org/issue1652
+        # For details on Python and SIGPIPE, see https://bugs.python.org/issue1652
         try:
             import signal
             signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -110,6 +135,9 @@ class CSVKitUtility(object):
         if 'f' not in self.override_flags:
             self.input_file = self._open_input_file(self.args.input_path)
 
+        if getattr(self.args, 'add_bom', False):
+            self.output_file.buffer.write(BOM_UTF8)
+
         try:
             with warnings.catch_warnings():
                 if getattr(self.args, 'no_header_row', None):
@@ -126,7 +154,7 @@ class CSVKitUtility(object):
 
         Should be overriden by individual utilities and explicitly called by the executing script.
         """
-        raise NotImplementedError(' must be provided by each subclass of CSVKitUtility.')
+        raise NotImplementedError('main must be provided by each subclass of CSVKitUtility.')
 
     def _init_common_parser(self):
         """
@@ -135,7 +163,9 @@ class CSVKitUtility(object):
         whose single-letter form is contained in 'omitflags' will be left out of the configured parser. Use 'f' for
         file.
         """
-        self.argparser = argparse.ArgumentParser(description=self.description, epilog=self.epilog)
+        self.argparser = argparse.ArgumentParser(
+            prog=type(self).__name__.lower(), description=self.description, epilog=self.epilog
+        )
 
         # Input
         if 'f' not in self.override_flags:
@@ -156,9 +186,9 @@ class CSVKitUtility(object):
                 help='Character used to quote strings in the input CSV file.')
         if 'u' not in self.override_flags:
             self.argparser.add_argument(
-                '-u', '--quoting', dest='quoting', type=int, choices=[0, 1, 2, 3],
-                help='Quoting style used in the input CSV file. 0 = Quote Minimal, 1 = Quote All, '
-                     '2 = Quote Non-numeric, 3 = Quote None.')
+                '-u', '--quoting', dest='quoting', type=int, choices=QUOTING_CHOICES,
+                help='Quoting style used in the input CSV file: 0 quote minimal, 1 quote all, '
+                     '2 quote non-numeric, 3 quote none.')
         if 'b' not in self.override_flags:
             self.argparser.add_argument(
                 '-b', '--no-doublequote', dest='doublequote', action='store_false',
@@ -166,7 +196,7 @@ class CSVKitUtility(object):
         if 'p' not in self.override_flags:
             self.argparser.add_argument(
                 '-p', '--escapechar', dest='escapechar',
-                help='Character used to escape the delimiter if --quoting 3 ("Quote None") is specified and to escape '
+                help='Character used to escape the delimiter if --quoting 3 ("quote none") is specified and to escape '
                      'the QUOTECHAR if --no-doublequote is specified.')
         if 'z' not in self.override_flags:
             self.argparser.add_argument(
@@ -174,7 +204,7 @@ class CSVKitUtility(object):
                 help='Maximum length of a single field in the input CSV file.')
         if 'e' not in self.override_flags:
             self.argparser.add_argument(
-                '-e', '--encoding', dest='encoding', default='utf-8-sig',
+                '-e', '--encoding', dest='encoding', default=os.getenv('PYTHONIOENCODING', 'utf-8-sig'),
                 help='Specify the encoding of the input CSV file.')
         if 'L' not in self.override_flags:
             self.argparser.add_argument(
@@ -184,18 +214,22 @@ class CSVKitUtility(object):
             self.argparser.add_argument(
                 '-S', '--skipinitialspace', dest='skipinitialspace', action='store_true',
                 help='Ignore whitespace immediately following the delimiter.')
-        if 'blanks' not in self.override_flags:
+        if 'I' not in self.override_flags:
             self.argparser.add_argument(
                 '--blanks', dest='blanks', action='store_true',
                 help='Do not convert "", "na", "n/a", "none", "null", "." to NULL.')
-        if 'date-format' not in self.override_flags:
+            self.argparser.add_argument(
+                '--null-value', dest='null_values', nargs='+', default=[],
+                help='Convert this value to NULL. --null-value can be specified multiple times.')
             self.argparser.add_argument(
                 '--date-format', dest='date_format',
                 help='Specify a strptime date format string like "%%m/%%d/%%Y".')
-        if 'datetime-format' not in self.override_flags:
             self.argparser.add_argument(
                 '--datetime-format', dest='datetime_format',
                 help='Specify a strptime datetime format string like "%%m/%%d/%%Y %%I:%%M %%p".')
+            self.argparser.add_argument(
+                '--no-leading-zeroes', dest='no_leading_zeroes', action='store_true',
+                help='Do not convert a numeric value with leading zeroes to a number.')
         if 'H' not in self.override_flags:
             self.argparser.add_argument(
                 '-H', '--no-header-row', dest='no_header_row', action='store_true',
@@ -216,6 +250,10 @@ class CSVKitUtility(object):
                 '-l', '--linenumbers', dest='line_numbers', action='store_true',
                 help='Insert a column of line numbers at the front of the output. Useful when piping to grep or as a '
                      'simple primary key.')
+        if 'add-bom' not in self.override_flags:
+            self.argparser.add_argument(
+                '--add-bom', dest='add_bom', action='store_true',
+                help='Add the UTF-8 byte-order mark (BOM) to the output, for Excel compatibility')
 
         # Input/Output
         if 'zero' not in self.override_flags:
@@ -225,34 +263,33 @@ class CSVKitUtility(object):
                      '1-based numbering.')
 
         self.argparser.add_argument(
-            '-V', '--version', action='version', version='%(prog)s 1.0.6',
+            '-V', '--version', action='version', version='%(prog)s 2.2.0',
             help='Display version information and exit.')
 
-    def _open_input_file(self, path):
+    def _open_input_file(self, path, opened=False):
         """
         Open the input file specified on the command line.
         """
-        if six.PY2:
-            mode = 'Urb'
-            kwargs = {}
-        else:
-            mode = 'rt'  # default
-            kwargs = {'encoding': self.args.encoding}
-
         if not path or path == '-':
+            # "UnsupportedOperation: It is not possible to set the encoding or newline of stream after the first read"
+            if not opened:
+                sys.stdin.reconfigure(encoding=self.args.encoding)
             f = sys.stdin
         else:
             extension = splitext(path)[1]
 
             if extension == '.gz':
-                f = LazyFile(gzip.open, path, mode, **kwargs)
+                func = gzip.open
             elif extension == '.bz2':
-                if six.PY2:
-                    f = LazyFile(bz2.BZ2File, path, mode, **kwargs)
-                else:
-                    f = LazyFile(bz2.open, path, mode, **kwargs)
+                func = bz2.open
+            elif extension == '.xz':
+                func = lzma.open
+            elif extension == '.zst' and zstandard:
+                func = zstandard.open
             else:
-                f = LazyFile(open, path, mode, **kwargs)
+                func = open
+
+            f = LazyFile(func, path, mode='rt', encoding=self.args.encoding)
 
         return f
 
@@ -262,18 +299,19 @@ class CSVKitUtility(object):
         """
         kwargs = {}
 
+        field_size_limit = getattr(self.args, 'field_size_limit')
+        if field_size_limit is not None:
+            csv.field_size_limit(field_size_limit)
+
         if self.args.tabs:
             kwargs['delimiter'] = '\t'
         elif self.args.delimiter:
             kwargs['delimiter'] = self.args.delimiter
 
-        for arg in ('quotechar', 'quoting', 'doublequote', 'escapechar', 'field_size_limit', 'skipinitialspace'):
+        for arg in ('quotechar', 'quoting', 'doublequote', 'escapechar', 'skipinitialspace'):
             value = getattr(self.args, arg)
             if value is not None:
                 kwargs[arg] = value
-
-        if six.PY2 and self.args.encoding:
-            kwargs['encoding'] = self.args.encoding
 
         if getattr(self.args, 'no_header_row', None):
             kwargs['header'] = not self.args.no_header_row
@@ -295,9 +333,6 @@ class CSVKitUtility(object):
         """
         Installs a replacement for sys.excepthook, which handles pretty-printing uncaught exceptions.
         """
-        if six.PY2:
-            sys.stderr = codecs.getwriter('utf-8')(sys.stderr)
-
         def handler(t, value, traceback):
             if self.args.verbose:
                 sys.__excepthook__(t, value, traceback)
@@ -305,49 +340,58 @@ class CSVKitUtility(object):
                 # Special case handling for Unicode errors, which behave very strangely
                 # when cast with unicode()
                 if t == UnicodeDecodeError:
-                    sys.stderr.write('Your file is not "%s" encoded. Please specify the correct encoding with the -e '
-                                     'flag or with the PYTHONIOENCODING environment variable. Use the -v flag to see '
-                                     'the complete error.\n' % self.args.encoding)
+                    sys.stderr.write(
+                        'Your file is not "%s" encoded. Please specify the correct encoding with the --encoding flag.'
+                        ' Use the -v flag to see the complete error.\n' % self.args.encoding
+                    )
                 else:
-                    sys.stderr.write('%s: %s\n' % (t.__name__, six.text_type(value)))
+                    sys.stderr.write(f'{t.__name__}: {str(value)}\n')
 
         sys.excepthook = handler
 
     def get_column_types(self):
         if getattr(self.args, 'blanks', None):
-            type_kwargs = {'null_values': ()}
+            type_kwargs = {'null_values': []}
         else:
-            type_kwargs = {}
+            type_kwargs = {'null_values': list(DEFAULT_NULL_VALUES)}
+        for null_value in getattr(self.args, 'null_values', []):
+            type_kwargs['null_values'].append(null_value)
 
         text_type = agate.Text(**type_kwargs)
 
-        if self.args.no_inference:
+        if getattr(self.args, 'no_inference', None):
             types = [text_type]
         else:
-            number_type = agate.Number(locale=self.args.locale, **type_kwargs)
+            number_type = agate.Number(
+                locale=self.args.locale, no_leading_zeroes=getattr(self.args, 'no_leading_zeroes', None), **type_kwargs
+            )
 
-            # See the order in the `agate.TypeTester` class.
-            types = [
-                agate.Boolean(**type_kwargs),
-                agate.TimeDelta(**type_kwargs),
-                agate.Date(date_format=self.args.date_format, **type_kwargs),
-                agate.DateTime(datetime_format=self.args.datetime_format, **type_kwargs),
-                text_type,
-            ]
-
-            # In order to parse dates like "20010101".
-            if self.args.date_format or self.args.datetime_format:
-                types.insert(-1, number_type)
+            if getattr(self.args, 'out_quoting', None) == 2:  # QUOTE_NONUMERIC
+                types = [number_type, text_type]
             else:
-                types.insert(1, number_type)
+                # See the order in the `agate.TypeTester` class.
+                types = [
+                    agate.Boolean(**type_kwargs),
+                    agate.TimeDelta(**type_kwargs),
+                    agate.Date(date_format=self.args.date_format, **type_kwargs),
+                    agate.DateTime(datetime_format=self.args.datetime_format, **type_kwargs),
+                    text_type,
+                ]
+
+                # In order to parse dates like "20010101".
+                if self.args.datetime_format:
+                    types.insert(-1, number_type)
+                elif self.args.date_format:
+                    types.insert(-2, number_type)
+                else:
+                    types.insert(1, number_type)
 
         return agate.TypeTester(types=types)
 
     def get_column_offset(self):
         if self.args.zero_based:
             return 0
-        else:
-            return 1
+        return 1
 
     def skip_lines(self):
         if isinstance(self.args.skip_lines, int):
@@ -383,7 +427,8 @@ class CSVKitUtility(object):
             self.args.columns,
             column_names,
             column_offset,
-            getattr(self.args, 'not_columns', None)
+            getattr(self.args, 'not_columns', None),
+            ignore_unknown_columns=getattr(self.args, 'ignore_unknown_columns', False),
         )
 
         return rows, column_names, column_ids
@@ -417,6 +462,22 @@ def isatty(f):
         return False
 
 
+def default_str_decimal(obj):
+    if isinstance(obj, (datetime.date, datetime.datetime)):
+        return obj.isoformat()
+    if isinstance(obj, decimal.Decimal):
+        return str(obj)
+    raise TypeError(f'{repr(obj)} is not JSON serializable')
+
+
+def default_float_decimal(obj):
+    if isinstance(obj, datetime.timedelta):
+        return obj.total_seconds()
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    return default_str_decimal(obj)
+
+
 def make_default_headers(n):
     """
     Make a set of simple, default headers for files that are missing them.
@@ -430,29 +491,69 @@ def match_column_identifier(column_names, c, column_offset=1):
     Note that integer values are *always* treated as positional identifiers. If you happen to have
     column names which are also integers, you must specify them using a positional index.
     """
-    if isinstance(c, six.string_types) and not c.isdigit() and c in column_names:
+    if isinstance(c, str) and not c.isdigit() and c in column_names:
         return column_names.index(c)
-    else:
-        try:
-            c = int(c) - column_offset
-        # Fail out if neither a column name nor an integer
-        except ValueError:
-            raise ColumnIdentifierError("Column '%s' is invalid. It is neither an integer nor a column name. "
-                                        "Column names are: %s" % (c, repr(column_names)[1:-1]))
 
-        # Fail out if index is 0-based
-        if c < 0:
-            raise ColumnIdentifierError("Column %i is invalid. Columns are 1-based." % (c + column_offset))
+    try:
+        c = int(c) - column_offset
+    # Fail out if neither a column name nor an integer
+    except ValueError:
+        raise ColumnIdentifierError("Column '%s' is invalid. It is neither an integer nor a column name. "
+                                    "Column names are: %s" % (c, repr(column_names)[1:-1]))
 
-        # Fail out if index is out of range
-        if c >= len(column_names):
-            raise ColumnIdentifierError("Column %i is invalid. The last column is '%s' at index %i." % (
-                c + column_offset, column_names[-1], len(column_names) - 1 + column_offset))
+    # Fail out if index is 0-based
+    if c < 0:
+        raise ColumnIdentifierError("Column %i is invalid. Columns are 1-based." % (c + column_offset))
+
+    # Fail out if index is out of range
+    if c >= len(column_names):
+        raise ColumnIdentifierError("Column %i is invalid. The last column is '%s' at index %i." % (
+            c + column_offset, column_names[-1], len(column_names) - 1 + column_offset))
 
     return c
 
 
-def parse_column_identifiers(ids, column_names, column_offset=1, excluded_columns=None):
+def _resolve_column_identifier(identifier, column_names, column_offset, ignore_unknown_columns, ignore_invalid_range):
+    """
+    Resolve a single column identifier (a name, a 1-based index, or an integer range) to a list of indices.
+
+    An unmatched name or index is skipped if ``ignore_unknown_columns`` is set, and raises otherwise. A
+    malformed range, or a range that references a nonexistent column, is skipped if ``ignore_invalid_range``
+    is set, and raises otherwise.
+    """
+    try:
+        return [match_column_identifier(column_names, identifier, column_offset)]
+    except ColumnIdentifierError:
+        if ':' in identifier:
+            a, b = identifier.split(':', 1)
+        elif '-' in identifier:
+            a, b = identifier.split('-', 1)
+        elif ignore_unknown_columns:
+            return []
+        else:
+            raise
+
+        try:
+            a = int(a) if a else 1
+            b = int(b) + 1 if b else len(column_names) + 1
+        except ValueError:
+            if ignore_invalid_range:
+                return []
+            raise ColumnIdentifierError(
+                "Invalid range %s. Ranges must be two integers separated by a - or : character." % identifier)
+
+        indices = []
+        for index in range(a, b):
+            try:
+                indices.append(match_column_identifier(column_names, index, column_offset))
+            except ColumnIdentifierError:
+                if ignore_invalid_range:
+                    continue
+                raise
+        return indices
+
+
+def parse_column_identifiers(ids, column_names, column_offset=1, excluded_columns=None, ignore_unknown_columns=False):
     """
     Parse a comma-separated list of column indices AND/OR names into a list of integer indices.
     Ranges of integers can be specified with two integers separated by a '-' or ':' character.
@@ -467,66 +568,63 @@ def parse_column_identifiers(ids, column_names, column_offset=1, excluded_column
 
     if ids:
         columns = []
-
-        for c in ids.split(','):
-            try:
-                columns.append(match_column_identifier(column_names, c, column_offset))
-            except ColumnIdentifierError:
-                if ':' in c:
-                    a, b = c.split(':', 1)
-                elif '-' in c:
-                    a, b = c.split('-', 1)
-                else:
-                    raise
-
-                try:
-                    if a:
-                        a = int(a)
-                    else:
-                        a = 1
-                    if b:
-                        b = int(b) + 1
-                    else:
-                        b = len(column_names) + 1
-
-                except ValueError:
-                    raise ColumnIdentifierError(
-                        "Invalid range %s. Ranges must be two integers separated by a - or : character.")
-
-                for x in range(a, b):
-                    columns.append(match_column_identifier(column_names, x, column_offset))
+        for identifier in ids.split(','):
+            columns.extend(
+                _resolve_column_identifier(
+                    column_names=column_names,
+                    identifier=identifier,
+                    column_offset=column_offset,
+                    ignore_unknown_columns=ignore_unknown_columns,
+                    ignore_invalid_range=ignore_unknown_columns,
+                )
+            )
     else:
         columns = range(len(column_names))
 
     excludes = []
-
     if excluded_columns:
-        for c in excluded_columns.split(','):
-            try:
-                excludes.append(match_column_identifier(column_names, c, column_offset))
-            except ColumnIdentifierError:
-                if ':' in c:
-                    a, b = c.split(':', 1)
-                elif '-' in c:
-                    a, b = c.split('-', 1)
-                else:
-                    raise
+        for identifier in excluded_columns.split(','):
+            # -C is always tolerant of unknown column names, but a malformed range is still a user error.
+            excludes.extend(
+                _resolve_column_identifier(
+                    column_names=column_names,
+                    identifier=identifier,
+                    column_offset=column_offset,
+                    ignore_unknown_columns=True,
+                    ignore_invalid_range=False,
+                )
+            )
 
-                try:
-                    if a:
-                        a = int(a)
-                    else:
-                        a = 1
-                    if b:
-                        b = int(b) + 1
-                    else:
-                        b = len(column_names)
+    return [index for index in columns if index not in excludes]
 
-                except ValueError:
-                    raise ColumnIdentifierError(
-                        "Invalid range %s. Ranges must be two integers separated by a - or : character.")
 
-                for x in range(a, b):
-                    excludes.append(match_column_identifier(column_names, x, column_offset))
+def parse_list(pairs):
+    options = {}
+    for key, value in pairs:
+        try:
+            value = ast.literal_eval(value)
+        except ValueError:
+            pass
+        options[key] = value
+    return options
 
-    return [c for c in columns if c not in excludes]
+
+# Adapted from https://github.com/pallets/click/blame/main/src/click/utils.py
+def _expand_args(args):
+    out = []
+
+    for arg in args:
+        arg = os.path.expanduser(arg)
+        arg = os.path.expandvars(arg)
+
+        try:
+            matches = glob(arg, recursive=True)
+        except re.error:
+            matches = []
+
+        if matches:
+            out.extend(matches)
+        else:
+            out.append(arg)
+
+    return out

@@ -1,14 +1,7 @@
-#!/usr/bin/env python
-
+import io
 import os
 import sys
-
-import six
-
-try:
-    from mock import patch
-except ImportError:
-    from unittest.mock import patch
+from unittest.mock import patch
 
 try:
     import psycopg2  # noqa: F401
@@ -50,7 +43,7 @@ class TestSQL2CSV(CSVKitTestCase, EmptyFileTests):
         utility = CSVSQL(args)
         utility.run()
 
-        with open(csv_file, 'r') as f:
+        with open(csv_file) as f:
             text = f.read()
 
         return text.strip()
@@ -78,7 +71,7 @@ class TestSQL2CSV(CSVKitTestCase, EmptyFileTests):
         self.assertTrue('54' in csv)
 
     def test_stdin(self):
-        input_file = six.StringIO('select cast(3.1415 * 13.37 as integer) as answer')
+        input_file = io.BytesIO(b'select cast(3.1415 * 13.37 as integer) as answer')
 
         with stdin_as_string(input_file):
             csv = self.get_output([])
@@ -89,7 +82,7 @@ class TestSQL2CSV(CSVKitTestCase, EmptyFileTests):
         input_file.close()
 
     def test_stdin_with_query(self):
-        input_file = six.StringIO('select cast(3.1415 * 13.37 as integer) as answer')
+        input_file = io.BytesIO(b'select cast(3.1415 * 13.37 as integer) as answer')
 
         with stdin_as_string(input_file):
             csv = self.get_output(['--query', 'select 6*9 as question'])
@@ -100,7 +93,7 @@ class TestSQL2CSV(CSVKitTestCase, EmptyFileTests):
         input_file.close()
 
     def test_stdin_with_file(self):
-        input_file = six.StringIO('select cast(3.1415 * 13.37 as integer) as answer')
+        input_file = io.BytesIO(b'select cast(3.1415 * 13.37 as integer) as answer')
 
         with stdin_as_string(input_file):
             csv = self.get_output(['examples/test.sql'])
@@ -111,7 +104,7 @@ class TestSQL2CSV(CSVKitTestCase, EmptyFileTests):
         input_file.close()
 
     def test_stdin_with_file_and_query(self):
-        input_file = six.StringIO('select cast(3.1415 * 13.37 as integer) as answer')
+        input_file = io.BytesIO(b'select cast(3.1415 * 13.37 as integer) as answer')
 
         with stdin_as_string(input_file):
             csv = self.get_output(['examples/test.sql', '--query', 'select 6*9 as question'])

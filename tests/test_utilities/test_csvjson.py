@@ -1,15 +1,7 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
+import io
 import json
 import sys
-
-import six
-
-try:
-    from mock import patch
-except ImportError:
-    from unittest.mock import patch
+from unittest.mock import patch
 
 from csvkit.utilities.csvjson import CSVJSON, launch_new_instance
 from tests.utils import CSVKitTestCase, EmptyFileTests
@@ -21,6 +13,24 @@ class TestCSVJSON(CSVKitTestCase, EmptyFileTests):
     def test_launch_new_instance(self):
         with patch.object(sys, 'argv', [self.Utility.__name__.lower(), 'examples/dummy.csv']):
             launch_new_instance()
+
+    def test_options(self):
+        self.assertError(
+            launch_new_instance,
+            ['--key', 'value', '--stream'],
+            '--key is only allowed with --stream when --lat and --lon are also specified.',
+        )
+
+    def test_latlon_options(self):
+        for option, message in (
+            ('lat', '--lon is required whenever --lat is specified.'),
+            ('lon', '--lat is required whenever --lon is specified.'),
+            ('crs', '--crs is only allowed when --lat and --lon are also specified.'),
+            ('type', '--type is only allowed when --lat and --lon are also specified.'),
+            ('geometry', '--geometry is only allowed when --lat and --lon are also specified.'),
+        ):
+            with self.subTest(option=option):
+                self.assertError(launch_new_instance, [f'--{option}', 'value'], message)
 
     def test_simple(self):
         js = json.loads(self.get_output(['examples/dummy.csv']))
@@ -59,18 +69,18 @@ class TestCSVJSON(CSVKitTestCase, EmptyFileTests):
         output = self.get_output(['-i', '4', 'examples/dummy.csv'])
         js = json.loads(output)
         self.assertDictEqual(js[0], {'a': True, 'c': 3.0, 'b': 2.0})
-        six.assertRegex(self, output, '        "a": true,')
+        self.assertRegex(output, '        "a": true,')
 
     def test_keying(self):
         js = json.loads(self.get_output(['-k', 'a', 'examples/dummy.csv']))
         self.assertDictEqual(js, {'True': {'a': True, 'c': 3.0, 'b': 2.0}})
 
     def test_duplicate_keys(self):
-        output_file = six.StringIO()
+        output_file = io.StringIO()
         utility = CSVJSON(['-k', 'a', 'examples/dummy3.csv'], output_file)
-        six.assertRaisesRegex(self, ValueError,
-                              'Value True is not unique in the key column.',
-                              utility.run)
+        self.assertRaisesRegex(ValueError,
+                               'Value True is not unique in the key column.',
+                               utility.run)
         output_file.close()
 
     def test_geojson_with_id(self):
@@ -195,7 +205,7 @@ class TestCSVJSON(CSVKitTestCase, EmptyFileTests):
             '{"type": "Feature", "properties": {"slug": "jackson", "title": "Jackson", "description": "Cast Bronze", "address": "900 South Broadway Avenue", "type": "Sculpture", "photo_url": "http://i.imgur.com/aQJfv.jpg", "photo_credit": "Photo by Justin Edwards. Used with permission.", "last_seen_date": "2012-04-15"}, "geometry": {"type": "Point", "coordinates": [-95.299939, 32.339828]}}',  # noqa: E501
             '{"type": "Feature", "properties": {"slug": "505-third", "title": "Untitled", "description": "Stainless Steel", "address": "505 Third St.", "type": "Sculpture", "photo_url": "http://i.imgur.com/0moUY.jpg", "photo_credit": "Photo by Justin Edwards. Used with permission.", "last_seen_date": "2012-04-15"}, "geometry": {"type": "Point", "coordinates": [-95.305429, 32.333082]}}',  # noqa: E501
             '{"type": "Feature", "properties": {"slug": "obeidder", "title": "Obeidder Monster", "description": "Sharpie and Spray Paint", "address": "3319 Seaton St.", "type": "Street Art", "photo_url": "http://i.imgur.com/3aX7E.jpg", "photo_credit": "Photo by Justin Edwards. Used with permission.", "last_seen_date": "2012-04-15"}, "geometry": {"type": "Point", "coordinates": [-95.334619, 32.314431]}}',  # noqa: E501
-            '{"type": "Feature", "properties": {"slug": "sensor-device", "title": "Sensor Device", "artist": "Kurt Dyrhaug", "address": "University of Texas, Campus Drive", "type": "Sculpture", "photo_url": "http://media.hacktyler.com/artmap/photos/sensor-device.jpg", "photo_credit": "Photo by Christopher Groskopf. Used with permission.", "last_seen_date": "2012-04-16"}, "geometry": {"type": "Point", "coordinates": [-95.250699, 32.317216]}}'  # noqa: E501
+            '{"type": "Feature", "properties": {"slug": "sensor-device", "title": "Sensor Device", "artist": "Kurt Dyrhaug", "address": "University of Texas, Campus Drive", "type": "Sculpture", "photo_url": "http://media.hacktyler.com/artmap/photos/sensor-device.jpg", "photo_credit": "Photo by Christopher Groskopf. Used with permission.", "last_seen_date": "2012-04-16"}, "geometry": {"type": "Point", "coordinates": [-95.250699, 32.317216]}}',  # noqa: E501
         ])
 
     def test_ndgeojson_streaming(self):
@@ -218,5 +228,5 @@ class TestCSVJSON(CSVKitTestCase, EmptyFileTests):
             '{"type": "Feature", "properties": {"slug": "jackson", "title": "Jackson", "description": "Cast Bronze", "address": "900 South Broadway Avenue", "type": "Sculpture", "photo_url": "http://i.imgur.com/aQJfv.jpg", "photo_credit": "Photo by Justin Edwards. Used with permission.", "last_seen_date": "4/15/12"}, "geometry": {"type": "Point", "coordinates": [-95.299939, 32.339828]}}',  # noqa: E501
             '{"type": "Feature", "properties": {"slug": "505-third", "title": "Untitled", "description": "Stainless Steel", "address": "505 Third St.", "type": "Sculpture", "photo_url": "http://i.imgur.com/0moUY.jpg", "photo_credit": "Photo by Justin Edwards. Used with permission.", "last_seen_date": "4/15/12"}, "geometry": {"type": "Point", "coordinates": [-95.305429, 32.333082]}}',  # noqa: E501
             '{"type": "Feature", "properties": {"slug": "obeidder", "title": "Obeidder Monster", "description": "Sharpie and Spray Paint", "address": "3319 Seaton St.", "type": "Street Art", "photo_url": "http://i.imgur.com/3aX7E.jpg", "photo_credit": "Photo by Justin Edwards. Used with permission.", "last_seen_date": "4/15/12"}, "geometry": {"type": "Point", "coordinates": [-95.334619, 32.314431]}}',  # noqa: E501
-            '{"type": "Feature", "properties": {"slug": "sensor-device", "title": "Sensor Device", "artist": "Kurt Dyrhaug", "address": "University of Texas, Campus Drive", "type": "Sculpture", "photo_url": "http://media.hacktyler.com/artmap/photos/sensor-device.jpg", "photo_credit": "Photo by Christopher Groskopf. Used with permission.", "last_seen_date": "4/16/12"}, "geometry": {"type": "Point", "coordinates": [-95.250699, 32.317216]}}'  # noqa: E501
+            '{"type": "Feature", "properties": {"slug": "sensor-device", "title": "Sensor Device", "artist": "Kurt Dyrhaug", "address": "University of Texas, Campus Drive", "type": "Sculpture", "photo_url": "http://media.hacktyler.com/artmap/photos/sensor-device.jpg", "photo_credit": "Photo by Christopher Groskopf. Used with permission.", "last_seen_date": "4/16/12"}, "geometry": {"type": "Point", "coordinates": [-95.250699, 32.317216]}}',  # noqa: E501
         ])

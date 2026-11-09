@@ -1,12 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 import sys
-
-try:
-    from mock import patch
-except ImportError:
-    from unittest.mock import patch
+from unittest.mock import patch
 
 from csvkit.utilities.csvcut import CSVCut, launch_new_instance
 from tests.utils import ColumnsTests, CSVKitTestCase, EmptyFileTests, NamesTests
@@ -41,7 +34,7 @@ class TestCSVCut(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
         self.assertRows(['-c', '1,3', 'examples/test_utf8.csv'], [
             ['foo', 'baz'],
             ['1', '3'],
-            ['4', u'ʤ'],
+            ['4', 'ʤ'],
         ])
 
     def test_with_gzip(self):
@@ -60,6 +53,18 @@ class TestCSVCut(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
         self.assertRows(['-C', '1,3', 'examples/dummy.csv'], [
             ['b'],
             ['2'],
+        ])
+
+    def test_exclude_unknown_columns(self):
+        self.assertRows(['-C', '1,foo,42', 'examples/dummy.csv'], [
+            ['b', 'c'],
+            ['2', '3'],
+        ])
+
+    def test_ignore_unknown_columns(self):
+        self.assertRows(['-c', 'a,nope,c', '--ignore-unknown-columns', 'examples/dummy.csv'], [
+            ['a', 'c'],
+            ['1', '3'],
         ])
 
     def test_include_and_exclude(self):
@@ -97,3 +102,7 @@ class TestCSVCut(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
             '  2: b',
             '  3: c',
         ])
+
+    def test_null_byte(self):
+        # Test that csvcut doesn't error on a null byte.
+        self.get_output(['-C', '', 'examples/null_byte.csv'])
